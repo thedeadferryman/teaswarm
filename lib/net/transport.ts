@@ -5,8 +5,8 @@ import type { Peer, RawPacket, NetworkData } from '@lib/net/types';
 import { asComponent, isNil } from '@lib/util';
 import type { Decorator } from '@lib/net/debug';
 
-
-type OCSystemEvent<T extends OC.EventType> = LuaMultiReturn<[T, ...OC.EventMap[T]]>;
+type StrictInterceptor<K extends OC.EventType> = (event: OC.EventMap[K]) => void;
+type Interceptor<K> = K extends OC.EventType ? StrictInterceptor<K> : (event: any[]) => void;
 
 export interface TransportOptions {
 	debug?: {
@@ -14,6 +14,9 @@ export interface TransportOptions {
 		decorators?: {
 			send: Decorator<[Peer, NetworkData], unknown>;
 		};
+	};
+	signalInterceptors?: {
+		[k: string]: Interceptor<OC.EventType>;
 	};
 }
 
@@ -31,7 +34,12 @@ class Transport {
 		this.iface = asComponent(iface);
 	}
 
+	get address(): string {
+		return this.iface.address;
+	}
+
 	sendPacket(peer: Peer, packetData: NetworkData) {
+		this.trace('tx packet to send', ...packetData);
 		const decor = this.options.debug?.decorators?.send;
 
 		if (isNil(decor)) {
@@ -87,14 +95,18 @@ class Transport {
 		const [type, ...eventData] = event.pullFiltered(timeout, (...args: EventArgs<'modem_message'>) => {
 			const [type, ...packetData] = args;
 
-			if (type == 'modem_message') {
-				print('modem_message', ...args);
-			}
+			if (!isNil(this.options.signalInterceptors?.[type as OC.EventType])) return true;
 
 			return this.checkPacketMatches(args, port, fromAddr) && (
 				isNil(filter) || filter(this.parsePacket(packetData))
 			);
 		});
+
+		const interceptor = this.options.signalInterceptors?.[type as OC.EventType];
+
+		if (!isNil(interceptor)) {
+			(interceptor as Function)(eventData);
+		}
 
 		if (type != null) {
 			return this.parsePacket(eventData as OC.EventMap['modem_message']);

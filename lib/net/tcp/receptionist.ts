@@ -6,7 +6,17 @@ import { isNil } from '@lib/util';
 import * as thread from 'thread';
 import Reception from '@lib/net/tcp/reception';
 
-type MessageHandler = (sender: Peer, data: string) => unknown;
+export interface ReceptionistController {
+	shutdown: () => void;
+}
+
+type MessageHandler = (
+	sender: Peer,
+	data: string,
+	controller: ReceptionistController,
+) => unknown;
+
+const THREAD_WATCH_THRESHOLD = 20;
 
 class Receptionist {
 	constructor(
@@ -17,27 +27,52 @@ class Receptionist {
 
 	}
 
-	listen(onData: MessageHandler) {
-		const threads = [];
+	listen(
+		onData: MessageHandler,
+		onHeartbeat?: (controller: ReceptionistController) => unknown,
+	) {
+		let threads = [];
+		let shutdownFlag = false;
+
+		const controller = {
+			shutdown: () => {
+				shutdownFlag = true;
+			},
+		} satisfies ReceptionistController;
 
 		this.transport.open(this.localPort);
 
 		while (true) {
+			if (shutdownFlag) {
+				break;
+			}
+
+			if (threads.length >= THREAD_WATCH_THRESHOLD) {
+				threads = [];
+			}
+
+			onHeartbeat?.(controller);
+
 			const evt = this.transport.tryReceivePacket(
 				this.localPort,
 				undefined,
 				this.matchPacket(ofType('HELO')),
+				this.heartbeat,
 			);
 
 			if (!isNil(evt)) {
-				threads.push(this.processTransmission(evt, onData));
+				threads.push(this.processTransmission(evt, onData, controller));
 			}
 		}
 
 		thread.waitForAll(threads);
 	}
 
-	private processTransmission(rawPacket: RawPacket, onData: MessageHandler) {
+	private processTransmission(
+		rawPacket: RawPacket,
+		onMessage: MessageHandler,
+		controller: ReceptionistController,
+	) {
 		const packet = parsePacket(rawPacket.data);
 		const peer = { addr: rawPacket.sender, port: packet.srcPort };
 		const reception = new Reception(
@@ -45,12 +80,12 @@ class Receptionist {
 		);
 
 		return thread.create(
-			(reception: Reception, peer: Peer, onData: MessageHandler) => {
+			(reception: Reception, peer: Peer, onData: MessageHandler, controller: ReceptionistController) => {
 				const data = reception.receive();
 
-				onData(peer, data);
+				onData(peer, data, controller);
 			},
-			reception, peer, onData,
+			reception, peer, onMessage, controller,
 		);
 	}
 

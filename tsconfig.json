@@ -39,7 +39,6 @@
     "luaTarget": "5.3",
     "luaLibImport": "require-minimal",
     "noImplicitSelf": true,
-    "tstlVerbose": true,
     "luaPlugins": [
       {
         "name": "./tooling/mod-resolution.ts"

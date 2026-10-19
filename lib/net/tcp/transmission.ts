@@ -6,11 +6,11 @@ import { encodePacket, type TcpPacket, tryParsePacket, parsePacket } from '@lib/
 import { type StreamReader, consumeStream } from '@lib/std/StreamReader';
 import { always, ofType, type PacketMatcher } from '@lib/net/tcp/util';
 
-export interface ConnectionOptions {
+export interface TcpTransmissionOptions {
 	packetSize: number;
 	packetRetryCount: number;
+	finalizeRetryCount: number;
 	timeout?: number;
-	closureTimeout?: number;
 }
 
 class Transmission {
@@ -19,18 +19,17 @@ class Transmission {
 
 	private closed: boolean = false;
 
-	private options: ConnectionOptions;
+	private options: TcpTransmissionOptions;
 
 	constructor(
 		private transport: Transport,
 		private peer: Peer,
 		private localPort: number,
-		options: ConnectionOptions,
+		options: TcpTransmissionOptions,
 	) {
 		this.channelId = packAddr(uuid.next());
 		this.options = {
 			timeout: 2,
-			closureTimeout: 10,
 			...options,
 		};
 	}
@@ -49,7 +48,7 @@ class Transmission {
 		});
 	}
 
-	execute() {
+	transmit() {
 		this.closed = true;
 
 		this.open();
@@ -58,63 +57,64 @@ class Transmission {
 			this.sendDataPacket(id);
 		}
 
-		this.transport.sendPacket(this.peer, encodePacket(this.buildPacket({
-			type: 'FIN',
-		})));
+		this.finalize();
+	}
 
-		while (true) {
-			const packet = this.tryReceivePacket(always(), this.options.closureTimeout);
+	private finalize() {
+		for (let i = 0; i < this.options.finalizeRetryCount; i++) {
+			this.sendPacket({ type: 'FIN' });
 
-			if (isNil(packet)) {
-				throw 'timeout';
-			}
+			while (true) {
+				const packet = this.tryReceivePacket(always(), this.options.timeout);
 
-			if (packet?.type === 'FIN_ACK') {
-				break;
-			}
+				if (isNil(packet)) {
+					break;
+				}
 
-			if (packet?.type === 'REPT') {
-				this.sendDataPacket(packet.seqNo);
+				if (packet?.type === 'FIN_ACK') {
+					return;
+				}
+
+				if (packet?.type === 'REPT') {
+					this.sendDataPacket(packet.seqNo);
+				}
 			}
 		}
+
+		throw 'failed to finalize transmission: timeout';
 	}
 
 	private open() {
-		try {
-			this.transport.open(this.localPort);
-		} catch (e) {
+		this.transport.open(this.localPort);
+
+		for (let i = 0; i < this.options.packetRetryCount; i++) {
+			this.sendPacket({ type: 'HELO' });
+
+			const pkt = this.tryReceivePacket(
+				ofType('ACK'),
+				this.options.timeout,
+			);
+
+			if (!isNil(pkt)) {
+				return;
+			}
 		}
 
-		this.transport.sendPacket(this.peer, encodePacket(this.buildPacket({
-			type: 'HELO',
-		})));
-
-		this.receivePacket(
-			ofType('ACK'),
-			this.options.timeout,
-		);
+		throw 'failed to open transmission: timeout';
 	}
 
 	private sendDataPacket(seqNo: number) {
 		assert(seqNo < this.data.length);
 
-		this.transport.sendPacket(this.peer, encodePacket(this.buildPacket({
+		this.sendPacket({
 			type: 'DATA',
 			seqNo: seqNo,
 			data: this.data[seqNo]!!,
-		})));
+		});
 	}
 
-	private matchPacket(cb: PacketMatcher) {
-		return (raw: RawPacket) => {
-			const packet = tryParsePacket(raw.data);
-
-			if (isNil(packet)) return false;
-
-			if (packet.chId !== this.channelId) return false;
-
-			return cb(packet);
-		};
+	private sendPacket(packet: Partial<TcpPacket> & Pick<TcpPacket, 'type'>) {
+		this.transport.sendPacket(this.peer, encodePacket(this.buildPacket(packet)));
 	}
 
 	private buildPacket(packet: Partial<TcpPacket> & Pick<TcpPacket, 'type'>): TcpPacket {
@@ -129,17 +129,6 @@ class Transmission {
 		};
 	}
 
-	private receivePacket(matcher: PacketMatcher, timeout?: number) {
-		const raw = this.transport.receivePacket(
-			this.localPort,
-			this.peer.addr,
-			this.matchPacket(matcher),
-			timeout,
-		);
-
-		return parsePacket(raw.data);
-	}
-
 	private tryReceivePacket(matcher: PacketMatcher, timeout?: number) {
 		const raw = this.transport.tryReceivePacket(
 			this.localPort,
@@ -151,6 +140,18 @@ class Transmission {
 		if (isNil(raw)) return;
 
 		return parsePacket(raw.data);
+	}
+
+	private matchPacket(cb: PacketMatcher) {
+		return (raw: RawPacket) => {
+			const packet = tryParsePacket(raw.data);
+
+			if (isNil(packet)) return false;
+
+			if (packet.chId !== this.channelId) return false;
+
+			return cb(packet);
+		};
 	}
 }
 

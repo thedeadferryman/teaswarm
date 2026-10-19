@@ -26,19 +26,18 @@ class Reception {
 			type: 'ACK',
 		});
 
+		let finalize = false;
+
 		while (true) {
 			const packet = this.receivePacket(always());
 
 			if (packet.type === 'DATA' && isNil(this.data[packet.seqNo])) {
 				this.data[packet.seqNo] = packet.data;
-				//
-				// this.sendPacket({
-				// 	type: 'DATA_ACK',
-				// 	seqNo: packet.seqNo,
-				// });
+
 			}
 
-			if (packet.type === 'FIN') {
+			if (packet.type === 'FIN' || finalize) {
+				finalize = true;
 				const missing = this.findMissingPackets();
 
 				let misses = 0;

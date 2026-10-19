@@ -5,11 +5,9 @@ import Transmission from '@lib/net/tcp/transmission';
 import { StringReader } from '@lib/std/StreamReader';
 import { lossy } from '@lib/net/debug';
 
-const destAddr = 'cc2dbcf8-abe7-4e6f-b5f9-1d4337ca24b4';
+const destAddr = 'aedd0093-0b48-45fd-b504-5bd69e35e489';
 
 const modem = asComponent(component.getPrimary('modem'));
-
-math.randomseed(220);
 
 const transport = new Transport(modem.address, {
 	debug: {
@@ -17,9 +15,15 @@ const transport = new Transport(modem.address, {
 		decorators: {
 			send: lossy({
 				name: 'tx:sendPacket',
-				trace: true,
+				trace: false,
 				chance: 20,
 			}),
+		},
+	},
+	signalInterceptors: {
+		interrupted: () => {
+			print('Interrupted');
+			os.exit();
 		},
 	},
 });
@@ -27,12 +31,12 @@ const transport = new Transport(modem.address, {
 const txm = new Transmission(transport, { addr: destAddr, port: 27 }, 27, {
 	packetSize: 4,
 	packetRetryCount: 3,
-	timeout: 20,
-	closureTimeout: 120,
+	timeout: 5,
+	finalizeRetryCount: 10,
 });
 
 const stream = new StringReader('Lorem ipsum un dolor sit amet');
 
 txm.write(stream);
 
-txm.execute();
+txm.transmit();

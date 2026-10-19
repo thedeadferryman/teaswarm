@@ -13,6 +13,10 @@
     "@opct/openos": "^0.2.0",
     "lua-types": "^2.14.1",
     "ts-node": "^10.9.2",
+    "typescript": "6.0.3",
     "typescript-to-lua": "^1.37.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5"
   }
 }

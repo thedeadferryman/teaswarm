@@ -5,7 +5,17 @@ import Receptionist from '@lib/net/tcp/receptionist';
 
 const modem = asComponent(component.getPrimary('modem'));
 
-const transport = new Transport(modem.address, {});
+const transport = new Transport(modem.address, {
+	debug: {
+		logging: false,
+	},
+	signalInterceptors: {
+		interrupted: () => {
+			print('Interrupted');
+			os.exit();
+		},
+	},
+});
 
 const server = new Receptionist(transport, 27, 0.5);
 
