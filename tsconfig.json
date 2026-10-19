@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "lib": [
+      "ESNext"
+    ],
+    "types": [
+      "lua-types/5.3",
+      "@opct/common",
+      "@opct/openos"
+    ],
+    "module": "commonjs",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noImplicitAny": true,
+    "noImplicitOverride": false,
+    "noImplicitReturns": false,
+    "noUncheckedIndexedAccess": true,
+    "ignoreDeprecations": "6.0",
+    "outDir": "dist",
+    "rootDir": ".",
+    "paths": {
+      "@lib/*": [
+        "./lib/*"
+      ]
+    }
+  },
+  "include": [
+    "lib/*.ts",
+    "lib/**/*.ts",
+    "bin/*.ts",
+  ],
+  "tstl": {
+    "luaTarget": "5.3",
+    "luaLibImport": "inline"
+  }
+}

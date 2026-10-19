@@ -1,0 +1,17 @@
+{
+  "name": "teaswarm",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.ts",
+  "scripts": {
+    "build": "tstl",
+    "build:watch": "pnpm build --watch"
+  },
+  "private": true,
+  "dependencies": {
+    "@opct/common": "^0.2.0",
+    "@opct/openos": "^0.2.0",
+    "lua-types": "^2.14.1",
+    "typescript-to-lua": "^1.37.1"
+  }
+}
