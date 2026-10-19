@@ -1,16 +1,29 @@
 import type { Addr, Component, EventArgs } from '@lib/types';
 import * as component from 'component';
 import * as event from 'event';
-import type { Peer, RawPacket } from '@lib/net/types';
+import type { Peer, RawPacket, NetworkData } from '@lib/net/types';
 import { asComponent, isNil } from '@lib/util';
+import type { Decorator } from '@lib/net/debug';
 
 
 type OCSystemEvent<T extends OC.EventType> = LuaMultiReturn<[T, ...OC.EventMap[T]]>;
 
+export interface TransportOptions {
+	debug?: {
+		logging?: boolean;
+		decorators?: {
+			send: Decorator<[Peer, NetworkData], unknown>;
+		};
+	};
+}
+
 class Transport {
 	private iface: OC.Components.Modem & Component;
 
-	constructor(ifaceAddr: Addr) {
+	constructor(
+		ifaceAddr: Addr,
+		private options: TransportOptions,
+	) {
 		const iface = component.proxy(ifaceAddr) as OC.Components.Modem;
 
 		if (!iface) throw new Error(`Couldn't find network interface: ${ifaceAddr}`);
@@ -18,18 +31,27 @@ class Transport {
 		this.iface = asComponent(iface);
 	}
 
-	sendPacket(peer: Peer, packetData: OC.Components.ModemData[]) {
-		print('send packet ', peer.addr, peer.port, ...packetData);
+	sendPacket(peer: Peer, packetData: NetworkData) {
+		const decor = this.options.debug?.decorators?.send;
+
+		if (isNil(decor)) {
+			return this.doSend(peer, packetData);
+		}
+
+		const decorated = decor((...args) => this.doSend(...args));
+
+		return decorated(peer, packetData);
+	}
+
+	private doSend(peer: Peer, packetData: NetworkData) {
+		this.trace('tx packet send', peer.addr, peer.port, ...packetData);
 		this.iface.send(peer.addr, peer.port, ...packetData);
 	}
 
 	open(port: number) {
-		print('transport open port', port, this.iface);
 		if (!this.iface.isOpen(port)) {
-			print('transport open port do', port);
 			this.iface.open(port);
 		}
-		print('transport open port done', port);
 	}
 
 	parsePacket([recvAddr, senderAddr, recvPort, _, ...data]: OC.EventMap['modem_message']): RawPacket {
@@ -48,40 +70,26 @@ class Transport {
 		fromAddr?: Addr,
 		filter?: (packet: RawPacket) => boolean,
 		timeout?: number,
-	): Promise<RawPacket> {
-		return new Promise<RawPacket>((resolve, reject) => {
-			const ctx = this;
-			const listener = function (this: void, ...args: EventArgs<'modem_message'>) {
-				if (ctx.checkPacketMatches(args, port, fromAddr)) {
-					const [type, ...data] = args;
-					const rawPacket = ctx.parsePacket(data);
+	): RawPacket {
+		const received = this.tryReceivePacket(port, fromAddr, filter, timeout);
 
-					if (isNil(filter) || filter(rawPacket)) {
-						resolve(rawPacket);
-						event.ignore('modem_message', listener);
-					}
-				}
-			};
+		if (isNil(received)) throw 'timeout';
 
-			event.listen('modem_message', listener);
-			if (!isNil(timeout)) {
-				event.timer(timeout, () => {
-					event.ignore('modem_message', listener);
-					reject('timeout');
-				});
-			}
-		});
+		return received;
 	}
 
-
-	receivePacketSync(
+	tryReceivePacket(
 		port: number,
 		fromAddr?: Addr,
 		filter?: (packet: RawPacket) => boolean,
 		timeout?: number,
-	): RawPacket | undefined {
+	) {
 		const [type, ...eventData] = event.pullFiltered(timeout, (...args: EventArgs<'modem_message'>) => {
-			const [_, ...packetData] = args;
+			const [type, ...packetData] = args;
+
+			if (type == 'modem_message') {
+				print('modem_message', ...args);
+			}
 
 			return this.checkPacketMatches(args, port, fromAddr) && (
 				isNil(filter) || filter(this.parsePacket(packetData))
@@ -104,6 +112,12 @@ class Transport {
 			&& recvPort == port
 			&& (!fromAddr || fromAddr == senderAddr)
 		);
+	}
+
+	private trace(...data: unknown[]) {
+		if (this.options.debug?.logging) {
+			print(...data);
+		}
 	}
 }
 

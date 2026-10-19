@@ -1,9 +1,8 @@
 import type { NetworkData } from '@lib/net/types';
 import { expect, isNil } from '@lib/util';
 
-export enum TcpPacketType {
-	HELO, ACK, DATA, DATA_ACK, REPT, FIN, FIN_ACK,
-}
+export const TcpPacketTypes = ['HELO', 'ACK', 'DATA', 'DATA_ACK', 'REPT', 'FIN', 'FIN_ACK'] as const;
+export type TcpPacketType = typeof TcpPacketTypes[number];
 
 export interface TcpPacket {
 	srcPort: number;
@@ -15,16 +14,21 @@ export interface TcpPacket {
 	data: string;
 }
 
+export const isTcpPacketType = (value: unknown): value is TcpPacketType => (
+	type(value) == 'string'
+	&& TcpPacketTypes.includes(tostring(value) as TcpPacketType)
+);
+
 export const encodePacket = (packet: TcpPacket): NetworkData => {
 	return [packet.srcPort, packet.destPort, packet.type, packet.seqNo, packet.seqSize, packet.chId, packet.data];
 };
 
 const expectPacketType = (value: unknown): TcpPacketType => {
-	const num = expect(value, 'number');
+	const type = expect(value, 'string');
 
-	if (isNil(TcpPacketType[num])) throw `expected a valid packet type, got ${value}`;
+	if (!isTcpPacketType(type)) throw `expected a valid packet type, got ${value}`;
 
-	return num;
+	return type;
 };
 
 export const parsePacket = (raw: NetworkData): TcpPacket => {

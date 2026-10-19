@@ -24,16 +24,26 @@
     "paths": {
       "@lib/*": [
         "./lib/*"
+      ],
+      "@lualib/*": [
+        "./*"
       ]
     }
   },
   "include": [
     "lib/*.ts",
     "lib/**/*.ts",
-    "bin/*.ts",
+    "bin/*.ts"
   ],
   "tstl": {
     "luaTarget": "5.3",
-    "luaLibImport": "inline"
+    "luaLibImport": "require-minimal",
+    "noImplicitSelf": true,
+    "tstlVerbose": true,
+    "luaPlugins": [
+      {
+        "name": "./tooling/mod-resolution.ts"
+      }
+    ]
   }
 }
