@@ -53,8 +53,6 @@ server.start({
 	onRequest: (_, sender, req) => {
 		print(`from ${sender}: GET ${req.body}`);
 	},
-	onAfterRequest: (_, sender, req) => {
-	},
 });
 
 event.ignore('interrupted', callback);
