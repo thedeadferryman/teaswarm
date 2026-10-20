@@ -113,10 +113,14 @@ class Receptionist {
 		channelDiscriminator: string,
 		callbacks: ReceptionistCallbacks,
 	) {
-		if (this.channels.includes(channelDiscriminator)) {
+		if (
+			this.channels.includes(channelDiscriminator)
+		) {
 			this.sendControlPacket(sender, packet, 'ACK');
 			return;
 		}
+
+		if (!isNil(this.remnants[channelDiscriminator])) return;
 
 		const threadAdded = this.processTransmission(
 			packet, sender,
@@ -142,15 +146,18 @@ class Receptionist {
 	private cleanupRemnants() {
 		const remnantKeys = Object.keys(this.remnants);
 
-		if (remnantKeys.length > REMNANT_CLEANUP_LIMIT) {
-			this.remnants = {};
-			return;
-		}
-
 		for (const key of remnantKeys) {
-			if (isNil(this.remnants[key]) || this.remnants[key] >= computer.uptime()) {
+			if (
+				isNil(this.remnants[key])
+				|| this.remnants[key] < computer.uptime()
+			) {
 				delete this.remnants[key];
 			}
+		}
+
+		if (Object.keys(this.remnants).length > REMNANT_CLEANUP_LIMIT) {
+			this.remnants = {};
+			return;
 		}
 	}
 

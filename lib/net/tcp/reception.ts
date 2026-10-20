@@ -47,6 +47,7 @@ class Reception {
 						this.sendPacket({
 							type: 'FIN_ACK',
 						});
+						break;
 					}
 				}
 
