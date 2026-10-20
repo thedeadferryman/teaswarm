@@ -1,20 +1,24 @@
 import type { Peer, RawPacket } from '@lib/net/types';
-import { type TcpPacket, parsePacket, tryParsePacket, encodePacket } from '@lib/net/tcp/packet';
+import { type TcpPacket, tryParsePacket, encodePacket } from '@lib/net/tcp/packet';
 import type Transport from '@lib/net/transport';
 import { type PacketMatcher, always } from '@lib/net/tcp/util';
 import { isNil } from '@lib/util';
 
+export interface ReceptionOptions {
+	timeout: number;
+}
 
 class Reception {
 	private readonly localPort: number;
 	private readonly channelId: string;
 	private data: Partial<Record<number, string>> = {};
-	private seqSize: number;
+	private readonly seqSize: number;
 
 	constructor(
 		private readonly transport: Transport,
 		private readonly peer: Peer,
 		helo: TcpPacket,
+		private readonly options: ReceptionOptions,
 	) {
 		this.localPort = helo.destPort;
 		this.channelId = helo.chId;
@@ -29,7 +33,9 @@ class Reception {
 		let finalize = false;
 
 		while (true) {
-			const packet = this.receivePacket(always());
+			const packet = this.tryReceivePacket(always(), this.options.timeout);
+
+			if (isNil(packet)) throw 'timeout';
 
 			if (packet.type === 'DATA' && isNil(this.data[packet.seqNo])) {
 				this.data[packet.seqNo] = packet.data;
@@ -100,15 +106,17 @@ class Reception {
 		};
 	}
 
-	private receivePacket(matcher: PacketMatcher, timeout?: number) {
-		const raw = this.transport.receivePacket(
+	private tryReceivePacket(matcher: PacketMatcher, timeout?: number) {
+		const raw = this.transport.tryReceivePacket(
 			this.localPort,
 			this.peer.addr,
 			this.matchPacket(matcher),
 			timeout,
 		);
 
-		return parsePacket(raw.data);
+		if (isNil(raw)) return;
+
+		return tryParsePacket(raw.data);
 	}
 
 	private matchPacket(matcher: PacketMatcher) {

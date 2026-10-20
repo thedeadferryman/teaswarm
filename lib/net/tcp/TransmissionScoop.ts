@@ -21,7 +21,10 @@ class TransmissionScoop {
 		const server = new Receptionist(
 			this.transport,
 			ThreadPool.default(),
-			this.options,
+			{
+				channelTimeout: this.options.timeout,
+				...this.options,
+			},
 		);
 
 		const deadline = computer.uptime() + this.options.timeout;

@@ -6,7 +6,7 @@ import { type PacketMatcher, ofType } from '@lib/net/radp/util';
 import type { TcpTransmissionOptions } from '@lib/net/tcp/transmission';
 import type { RadpDataProvider } from '@lib/net/radp/DataProvider';
 import RequestHandler from '@lib/net/radp/RequestHandler';
-import * as thread from 'thread';
+import type ThreadPool from '@lib/std/ThreadPool';
 
 export interface RadpServerOptions {
 	controlPort: number;
@@ -16,7 +16,7 @@ export interface RadpServerOptions {
 }
 
 export interface RadpServerController {
-	shutdown: () => unknown;
+	shutdown: (force?: boolean) => unknown;
 }
 
 export interface RadpServerCallbacks {
@@ -28,6 +28,7 @@ export interface RadpServerCallbacks {
 class RadpServer {
 	constructor(
 		private transport: Transport,
+		private threadPool: ThreadPool,
 		private dataProvider: RadpDataProvider,
 		private options: RadpServerOptions,
 	) {
@@ -40,8 +41,12 @@ class RadpServer {
 		let shutdownFlag = false;
 
 		const controller = {
-			shutdown: () => {
+			shutdown: (force?: boolean) => {
 				shutdownFlag = true;
+
+				if (force) {
+					this.threadPool.terminate();
+				}
 			},
 		} satisfies RadpServerController;
 
@@ -51,6 +56,8 @@ class RadpServer {
 			if (shutdownFlag) {
 				break;
 			}
+
+			this.threadPool.refresh();
 
 			const pkt = this.transport.tryReceivePacket(
 				this.options.controlPort,
@@ -69,6 +76,8 @@ class RadpServer {
 				callbacks?.onAfterRequest?.(controller, pkt.sender, req);
 			}
 		}
+
+		this.threadPool.join();
 	}
 
 	private processRequest(
@@ -81,7 +90,7 @@ class RadpServer {
 			this.options,
 		);
 
-		return thread.create((handler: RequestHandler) => {
+		return this.threadPool.dispatch((handler: RequestHandler) => {
 			handler.process();
 		}, handler);
 	}

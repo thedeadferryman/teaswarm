@@ -24,16 +24,10 @@ class RequestHandler {
 	}
 
 	private sendResponse(resp: Pick<RadpDataPacket, 'type' | 'body'>) {
-		let packet: string = '<NIL>';
-
-		try {
-			packet = encodeRadpDataPacket({
-				uid: this.request.uid,
-				...resp,
-			});
-		} catch (e) {
-			print('error: ', e);
-		}
+		const packet = encodeRadpDataPacket({
+			uid: this.request.uid,
+			...resp,
+		});
 
 		const txm = new Transmission(
 			this.transport,

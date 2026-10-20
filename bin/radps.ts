@@ -4,6 +4,7 @@ import Transport from '@lib/net/transport';
 import RadpServer from '@lib/net/radp/server';
 import { InMemoryDataProvider } from '@lib/net/radp/DataProvider';
 import * as event from 'event';
+import ThreadPool from '@lib/std/ThreadPool';
 
 const modem = asComponent(component.getPrimary('modem'));
 
@@ -19,16 +20,20 @@ const dataProvider = new InMemoryDataProvider({
 		' Duis efficitur purus magna, sit amet ullamcorper erat congue non. Nunc porta diam sed tortor efficitur feugiat. Quisque commodo laoreet arcu.',
 });
 
-const server = new RadpServer(transport, dataProvider, {
-	controlPort: 24,
-	heartbeat: 0.5,
-	tcpPort: 26,
-	tcpOptions: {
-		packetSize: 256,
-		packetRetryCount: 3,
-		finalizeRetryCount: 10,
-	},
-});
+const server = new RadpServer(
+	transport,
+	ThreadPool.default(),
+	dataProvider,
+	{
+		controlPort: 24,
+		heartbeat: 0.5,
+		tcpPort: 26,
+		tcpOptions: {
+			packetSize: 256,
+			packetRetryCount: 3,
+			finalizeRetryCount: 10,
+		},
+	});
 
 let shutdown = false;
 

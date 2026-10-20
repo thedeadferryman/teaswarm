@@ -21,6 +21,7 @@ const transport = new Transport(modem.address, {
 const server = new Receptionist(transport, ThreadPool.default(), {
 	localPort: 27,
 	heartbeat: 0.5,
+	channelTimeout: 10,
 });
 
 print('Started server on port 27');

@@ -20,6 +20,7 @@ type MessageHandler = (
 export interface ReceptionistOptions {
 	localPort: number;
 	heartbeat: number;
+	channelTimeout: number;
 }
 
 export interface ReceptionistCallbacks {
@@ -54,6 +55,8 @@ class Receptionist {
 		let remnants: string[] = [];
 
 		while (true) {
+			callbacks.onHeartbeat?.(controller);
+
 			if (shutdownFlag) {
 				break;
 			}
@@ -63,7 +66,6 @@ class Receptionist {
 			}
 
 			this.threadPool.refresh();
-			callbacks.onHeartbeat?.(controller);
 
 			const evt = this.transport.tryReceivePacket(
 				this.options.localPort,
@@ -91,9 +93,7 @@ class Receptionist {
 					packet.type === 'HELO'
 					&& !channels.includes(channelDiscriminator)
 				) {
-					channels.push(channelDiscriminator);
-
-					this.processTransmission(
+					const threadAdded = this.processTransmission(
 						packet, sender,
 						controller,
 						callbacks.onMessage,
@@ -105,6 +105,8 @@ class Receptionist {
 							}
 						},
 					);
+
+					if (threadAdded) channels.push(channelDiscriminator);
 				}
 			}
 		}
@@ -133,7 +135,10 @@ class Receptionist {
 	) {
 		const peer = { addr: sender, port: packet.srcPort };
 		const reception = new Reception(
-			this.transport, peer, packet,
+			this.transport,
+			peer,
+			packet,
+			{ timeout: this.options.channelTimeout },
 		);
 
 		return this.threadPool.dispatch(
