@@ -33,7 +33,7 @@ class Reception {
 
 			if (packet.type === 'DATA' && isNil(this.data[packet.seqNo])) {
 				this.data[packet.seqNo] = packet.data;
-
+				continue;
 			}
 
 			if (packet.type === 'FIN' || finalize) {

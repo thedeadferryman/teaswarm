@@ -1,13 +1,14 @@
 import type Transport from '@lib/net/transport';
-import { type PacketMatcher, ofType } from '@lib/net/tcp/util';
+import { type PacketMatcher, ofType, anyOf } from '@lib/net/tcp/util';
 import type { RawPacket, Peer } from '@lib/net/types';
-import { tryParsePacket, parsePacket } from '@lib/net/tcp/packet';
+import { tryParsePacket, parsePacket, type TcpPacket, encodePacket } from '@lib/net/tcp/packet';
 import { isNil } from '@lib/util';
-import * as thread from 'thread';
 import Reception from '@lib/net/tcp/reception';
+import ThreadPool from '@lib/std/ThreadPool';
+import type { Addr } from '@lib/types';
 
 export interface ReceptionistController {
-	shutdown: () => void;
+	shutdown: (force?: boolean) => void;
 }
 
 type MessageHandler = (
@@ -16,74 +17,136 @@ type MessageHandler = (
 	controller: ReceptionistController,
 ) => unknown;
 
-const THREAD_WATCH_THRESHOLD = 20;
+export interface ReceptionistOptions {
+	localPort: number;
+	heartbeat: number;
+}
+
+export interface ReceptionistCallbacks {
+	onMessage: MessageHandler;
+	onHeartbeat?: (controller: ReceptionistController) => unknown;
+}
+
+const REMNANT_CLEANUP_LIMIT = 80;
 
 class Receptionist {
 	constructor(
 		private readonly transport: Transport,
-		private readonly localPort: number,
-		private readonly heartbeat: number,
+		private readonly threadPool: ThreadPool,
+		private readonly options: ReceptionistOptions,
 	) {
-
 	}
 
-	listen(
-		onData: MessageHandler,
-		onHeartbeat?: (controller: ReceptionistController) => unknown,
-	) {
-		let threads = [];
+	listen(callbacks: ReceptionistCallbacks): void {
+		this.transport.open(this.options.localPort);
+
 		let shutdownFlag = false;
 
 		const controller = {
-			shutdown: () => {
+			shutdown: (force?: boolean) => {
 				shutdownFlag = true;
+
+				if (force) this.threadPool.terminate();
 			},
 		} satisfies ReceptionistController;
 
-		this.transport.open(this.localPort);
+		let channels: string[] = [];
+		let remnants: string[] = [];
 
 		while (true) {
 			if (shutdownFlag) {
 				break;
 			}
 
-			if (threads.length >= THREAD_WATCH_THRESHOLD) {
-				threads = [];
+			if (remnants.length > REMNANT_CLEANUP_LIMIT) {
+				remnants = [];
 			}
 
-			onHeartbeat?.(controller);
+			this.threadPool.refresh();
+			callbacks.onHeartbeat?.(controller);
 
 			const evt = this.transport.tryReceivePacket(
-				this.localPort,
+				this.options.localPort,
 				undefined,
-				this.matchPacket(ofType('HELO')),
-				this.heartbeat,
+				this.matchPacket(
+					anyOf(
+						ofType('HELO'),
+						ofType('FIN'),
+					),
+				),
+				this.options.heartbeat,
 			);
 
 			if (!isNil(evt)) {
-				threads.push(this.processTransmission(evt, onData, controller));
+				const packet = parsePacket(evt.data);
+				const sender = evt.sender;
+				const channelDiscriminator = `${sender}:${packet.chId}`;
+
+				if (packet.type === 'FIN' && remnants.includes(channelDiscriminator)) {
+					this.closeRemnant(sender, packet);
+					remnants = remnants.filter(ch => ch !== channelDiscriminator);
+				}
+
+				if (
+					packet.type === 'HELO'
+					&& !channels.includes(channelDiscriminator)
+				) {
+					channels.push(channelDiscriminator);
+
+					this.processTransmission(
+						packet, sender,
+						controller,
+						callbacks.onMessage,
+						successful => {
+							channels = channels.filter(ch => ch !== channelDiscriminator);
+
+							if (successful) {
+								remnants.push(channelDiscriminator);
+							}
+						},
+					);
+				}
 			}
 		}
 
-		thread.waitForAll(threads);
+		this.threadPool.join();
+	}
+
+	private closeRemnant(sender: Addr, packet: TcpPacket): void {
+		this.transport.sendPacket({ addr: sender, port: packet.srcPort }, encodePacket({
+			type: 'FIN_ACK',
+			chId: packet.chId,
+			data: '',
+			srcPort: this.options.localPort,
+			destPort: packet.srcPort,
+			seqNo: 0,
+			seqSize: 0,
+		}));
 	}
 
 	private processTransmission(
-		rawPacket: RawPacket,
-		onMessage: MessageHandler,
+		packet: TcpPacket,
+		sender: Addr,
 		controller: ReceptionistController,
+		onMessage: MessageHandler,
+		onProcessed: (successful: boolean) => unknown,
 	) {
-		const packet = parsePacket(rawPacket.data);
-		const peer = { addr: rawPacket.sender, port: packet.srcPort };
+		const peer = { addr: sender, port: packet.srcPort };
 		const reception = new Reception(
 			this.transport, peer, packet,
 		);
 
-		return thread.create(
+		return this.threadPool.dispatch(
 			(reception: Reception, peer: Peer, onData: MessageHandler, controller: ReceptionistController) => {
-				const data = reception.receive();
+				let succeeded = false;
+				try {
+					const data = reception.receive();
 
-				onData(peer, data, controller);
+					onData(peer, data, controller);
+					succeeded = true;
+				} finally {
+					onProcessed(succeeded);
+				}
 			},
 			reception, peer, onMessage, controller,
 		);

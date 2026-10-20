@@ -18,6 +18,8 @@ class RequestExecutor {
 
 	execute() {
 		for (let i = 0; i < this.options.retryCount; i++) {
+			this.transport.open(this.options.localPort);
+
 			this.transport.sendPacket(this.options.server, encodeRadpControlPacket({
 				type: 'GET',
 				uid: this.uid,

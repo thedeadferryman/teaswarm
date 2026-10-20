@@ -18,3 +18,9 @@ export const allOf = (...matchers: PacketMatcher[]): PacketMatcher => (
 			.some(matcher => !matcher(packet))
 	)
 );
+
+export const anyOf = (...matchers: PacketMatcher[]): PacketMatcher => (
+	(packet: TcpPacket) => (
+		matchers.some(matcher => matcher(packet))
+	)
+);

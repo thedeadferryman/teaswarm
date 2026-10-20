@@ -1,6 +1,5 @@
 import type { NetworkData, Peer } from '@lib/net/types';
 import { expect, packAddr, unpackAddr } from '@lib/util';
-import type { RadpDataProvider } from '@lib/net/radp/DataProvider';
 
 export const RadpControlPacketTypes = ['GET'] as const;
 export type RadpControlPacketType = typeof RadpControlPacketTypes[number];
@@ -55,7 +54,7 @@ export const RadpDataPacketTypes = ['DATA', 'ERROR'] as const;
 export type RadpDataPacketType = typeof RadpDataPacketTypes[number];
 
 export const isRadpDataPacketType = (value: unknown): value is RadpDataPacketType => (
-	type('value') === 'string'
+	type(value) === 'string'
 	&& RadpDataPacketTypes.includes(value as RadpDataPacketType)
 );
 
@@ -65,7 +64,7 @@ export interface RadpDataPacket {
 	body: string;
 }
 
-const RadpDataPacketPattern = '< z z s';
+const RadpDataPacketPattern = '< z c17 s';
 
 export const encodeRadpDataPacket = (packet: RadpDataPacket) => {
 	return string.pack(RadpDataPacketPattern, packet.type, packAddr(packet.uid), packet.body);
