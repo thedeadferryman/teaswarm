@@ -1,14 +1,15 @@
 import type Transport from '@lib/net/transport';
 import { type PacketMatcher, ofType, anyOf } from '@lib/net/tcp/util';
 import type { RawPacket, Peer } from '@lib/net/types';
-import { tryParsePacket, parsePacket, type TcpPacket, encodePacket } from '@lib/net/tcp/packet';
+import { tryParsePacket, parsePacket, type TcpPacket, encodePacket, type TcpPacketType } from '@lib/net/tcp/packet';
 import { isNil } from '@lib/util';
 import Reception from '@lib/net/tcp/reception';
 import ThreadPool from '@lib/std/ThreadPool';
 import type { Addr } from '@lib/types';
+import * as computer from 'computer';
 
 export interface ReceptionistController {
-	shutdown: (force?: boolean) => void;
+	shutdown: (force?: boolean) => unknown;
 }
 
 type MessageHandler = (
@@ -21,6 +22,7 @@ export interface ReceptionistOptions {
 	localPort: number;
 	heartbeat: number;
 	channelTimeout: number;
+	remnantLifetime: number;
 }
 
 export interface ReceptionistCallbacks {
@@ -28,14 +30,26 @@ export interface ReceptionistCallbacks {
 	onHeartbeat?: (controller: ReceptionistController) => unknown;
 }
 
-const REMNANT_CLEANUP_LIMIT = 80;
+const REMNANT_CLEANUP_LIMIT = 250;
 
 class Receptionist {
+	private readonly options: ReceptionistOptions;
+
+	private channels: string[] = [];
+	private remnants: Partial<Record<string, number>> = {};
+	private controller: ReceptionistController = {
+		shutdown: () => undefined,
+	};
+
 	constructor(
 		private readonly transport: Transport,
 		private readonly threadPool: ThreadPool,
-		private readonly options: ReceptionistOptions,
+		options: Partial<ReceptionistOptions> & Omit<ReceptionistOptions, 'remnantLifetime'>,
 	) {
+		this.options = {
+			remnantLifetime: 30,
+			...options,
+		};
 	}
 
 	listen(callbacks: ReceptionistCallbacks): void {
@@ -43,29 +57,25 @@ class Receptionist {
 
 		let shutdownFlag = false;
 
-		const controller = {
+		this.controller = {
 			shutdown: (force?: boolean) => {
 				shutdownFlag = true;
 
 				if (force) this.threadPool.terminate();
 			},
-		} satisfies ReceptionistController;
-
-		let channels: string[] = [];
-		let remnants: string[] = [];
+		};
+		this.remnants = {};
+		this.channels = [];
 
 		while (true) {
-			callbacks.onHeartbeat?.(controller);
+			callbacks.onHeartbeat?.(this.controller);
 
 			if (shutdownFlag) {
 				break;
 			}
 
-			if (remnants.length > REMNANT_CLEANUP_LIMIT) {
-				remnants = [];
-			}
-
 			this.threadPool.refresh();
+			this.cleanupRemnants();
 
 			const evt = this.transport.tryReceivePacket(
 				this.options.localPort,
@@ -84,29 +94,12 @@ class Receptionist {
 				const sender = evt.sender;
 				const channelDiscriminator = `${sender}:${packet.chId}`;
 
-				if (packet.type === 'FIN' && remnants.includes(channelDiscriminator)) {
-					this.closeRemnant(sender, packet);
-					remnants = remnants.filter(ch => ch !== channelDiscriminator);
-				}
-
-				if (
-					packet.type === 'HELO'
-					&& !channels.includes(channelDiscriminator)
-				) {
-					const threadAdded = this.processTransmission(
-						packet, sender,
-						controller,
-						callbacks.onMessage,
-						successful => {
-							channels = channels.filter(ch => ch !== channelDiscriminator);
-
-							if (successful) {
-								remnants.push(channelDiscriminator);
-							}
-						},
-					);
-
-					if (threadAdded) channels.push(channelDiscriminator);
+				switch (packet.type) {
+					case 'FIN':
+						this.handleFIN(packet, sender, channelDiscriminator);
+						break;
+					case 'HELO':
+						this.handleHELO(packet, sender, channelDiscriminator, callbacks);
 				}
 			}
 		}
@@ -114,9 +107,60 @@ class Receptionist {
 		this.threadPool.join();
 	}
 
-	private closeRemnant(sender: Addr, packet: TcpPacket): void {
-		this.transport.sendPacket({ addr: sender, port: packet.srcPort }, encodePacket({
-			type: 'FIN_ACK',
+	private handleHELO(
+		packet: TcpPacket,
+		sender: Addr,
+		channelDiscriminator: string,
+		callbacks: ReceptionistCallbacks,
+	) {
+		if (this.channels.includes(channelDiscriminator)) {
+			this.sendControlPacket(sender, packet, 'ACK');
+			return;
+		}
+
+		const threadAdded = this.processTransmission(
+			packet, sender,
+			callbacks.onMessage,
+			successful => {
+				this.channels = this.channels.filter(ch => ch !== channelDiscriminator);
+
+				if (successful) {
+					this.remnants[channelDiscriminator] = computer.uptime() + this.options.remnantLifetime;
+				}
+			},
+		);
+
+		if (threadAdded) this.channels.push(channelDiscriminator);
+	}
+
+	private handleFIN(packet: TcpPacket, sender: Addr, discr: string) {
+		if (packet.type === 'FIN' && !isNil(this.remnants[discr])) {
+			this.sendControlPacket(sender, packet, 'FIN_ACK');
+		}
+	}
+
+	private cleanupRemnants() {
+		const remnantKeys = Object.keys(this.remnants);
+
+		if (remnantKeys.length > REMNANT_CLEANUP_LIMIT) {
+			this.remnants = {};
+			return;
+		}
+
+		for (const key of remnantKeys) {
+			if (isNil(this.remnants[key]) || this.remnants[key] >= computer.uptime()) {
+				delete this.remnants[key];
+			}
+		}
+	}
+
+	private sendControlPacket(
+		sender: Addr,
+		packet: TcpPacket,
+		type: TcpPacketType,
+	) {
+		return this.transport.sendPacket({ addr: sender, port: packet.srcPort }, encodePacket({
+			type,
 			chId: packet.chId,
 			data: '',
 			srcPort: this.options.localPort,
@@ -129,7 +173,6 @@ class Receptionist {
 	private processTransmission(
 		packet: TcpPacket,
 		sender: Addr,
-		controller: ReceptionistController,
 		onMessage: MessageHandler,
 		onProcessed: (successful: boolean) => unknown,
 	) {
@@ -153,7 +196,7 @@ class Receptionist {
 					onProcessed(succeeded);
 				}
 			},
-			reception, peer, onMessage, controller,
+			reception, peer, onMessage, this.controller,
 		);
 	}
 

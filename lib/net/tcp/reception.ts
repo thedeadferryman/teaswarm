@@ -39,6 +39,17 @@ class Reception {
 
 			if (packet.type === 'DATA' && isNil(this.data[packet.seqNo])) {
 				this.data[packet.seqNo] = packet.data;
+
+				if (finalize) {
+					const missing = this.findMissingPackets();
+
+					if (missing.length <= 0) {
+						this.sendPacket({
+							type: 'FIN_ACK',
+						});
+					}
+				}
+
 				continue;
 			}
 
@@ -46,23 +57,18 @@ class Reception {
 				finalize = true;
 				const missing = this.findMissingPackets();
 
-				let misses = 0;
-
-				for (const seqNo of missing) {
-					if (!isNil(seqNo)) {
-						misses += 1;
-						this.sendPacket({
-							type: 'REPT',
-							seqNo: seqNo,
-						});
-					}
-				}
-
-				if (misses <= 0) {
+				if (missing.length <= 0) {
 					this.sendPacket({
 						type: 'FIN_ACK',
 					});
 					break;
+				}
+
+				for (const seqNo of missing) {
+					this.sendPacket({
+						type: 'REPT',
+						seqNo: seqNo,
+					});
 				}
 			}
 		}
