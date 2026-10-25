@@ -20,6 +20,10 @@ export interface Clock {
 	time: () => number;
 }
 
+export interface Logger {
+	error: (...messages: unknown[]) => void;
+}
+
 export type EventSelector = (eventType: string, ...data: unknown[]) => boolean;
 
 type SchedulerEventPullResult<T> = EventPullResult<string> | LuaMultiReturn<[typeof TIMEOUT_EVENT]>;
@@ -76,6 +80,16 @@ type EventHook<T extends string> = (
 
 type AnyEventHook = (controller: SchedulerController, ...args: unknown[]) => unknown;
 
+const errorSafeSelector = (func: EventSelector): EventSelector => {
+	return (...args) => {
+		try {
+			return func(...args);
+		} catch {
+			return false;
+		}
+	};
+};
+
 class TaskScheduler {
 	private tasks: Record<string, Task> = {};
 
@@ -89,6 +103,7 @@ class TaskScheduler {
 	constructor(
 		private eventSource: EventSource,
 		private clock: Clock,
+		private logger: Logger,
 		private options: TaskSchedulerOptions,
 	) {
 	}
@@ -172,6 +187,11 @@ class TaskScheduler {
 			}
 
 			if (
+				coroutine.status(task.handle) === 'dead'
+				|| task.state !== 'running'
+			) return;
+
+			if (
 				!isNil(eventType)
 				&& task.selector(eventType, ...(eventData as OC.EventMap[OC.EventType]))
 			) {
@@ -211,7 +231,11 @@ class TaskScheduler {
 		for (const binding of bindings) {
 			const hook = this.hooks[binding];
 
-			hook?.(this.controller, type, ...args);
+			try {
+				hook?.(this.controller, type, ...args);
+			} catch (e) {
+				this.logger.error('Hook execution failed', e);
+			}
 		}
 	}
 
@@ -246,15 +270,17 @@ class TaskScheduler {
 		return {
 			selector: () => false,
 			state: 'finished',
+			deadline: undefined,
 		};
 	}
 
 	private handleTaskError(uid: string, message: string) {
-		print(`task ${uid} failed: ${message}`);
+		this.logger.error(`task ${uid} failed: ${message}`);
 
 		return {
 			selector: () => false,
 			state: 'ill',
+			deadline: undefined,
 		} satisfies Omit<Task, 'handle'>;
 	}
 
@@ -278,7 +304,7 @@ class TaskScheduler {
 	) {
 		const [filter, timeout] = data;
 
-		const selector = isFunction(filter) ? (filter as EventSelector) : () => false;
+		const selector = errorSafeSelector(isFunction(filter) ? (filter as EventSelector) : () => false);
 		const deadline = isNumber(timeout) ? (timeout + this.clock.time()) : undefined;
 
 		return {
