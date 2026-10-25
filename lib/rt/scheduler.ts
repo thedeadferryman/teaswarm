@@ -31,6 +31,8 @@ type SchedulerEventPullResult<T> = EventPullResult<string> | LuaMultiReturn<[typ
 export interface ITaskContext {
 	pullEventFiltered: (selector: EventSelector, timeout?: number) => SchedulerEventPullResult<string>;
 	pullEvent: <T extends string>(type: T, timeout?: number) => SchedulerEventPullResult<T>;
+
+	dispatch: (task: (context: ITaskContext) => unknown) => string;
 }
 
 type TaskState = 'new' | 'running' | 'ill' | 'finished';
@@ -50,7 +52,9 @@ const isTaskMessageType = (value: unknown): value is TaskMessageType => (
 );
 
 export class TaskContext implements ITaskContext {
-	constructor() {
+	constructor(
+		private scheduler: TaskScheduler,
+	) {
 	}
 
 	pullEventFiltered(selector: EventSelector, timeout?: number) {
@@ -67,6 +71,10 @@ export class TaskContext implements ITaskContext {
 			timeout,
 		) as EventPullResult<T>;
 	}
+
+	dispatch(task: (context: ITaskContext) => unknown) {
+		return this.scheduler.dispatch(task);
+	}
 }
 
 interface SchedulerController {
@@ -80,11 +88,15 @@ type EventHook<T extends string> = (
 
 type AnyEventHook = (controller: SchedulerController, ...args: unknown[]) => unknown;
 
-const errorSafeSelector = (func: EventSelector): EventSelector => {
+const errorSafeSelector = (
+	func: EventSelector,
+	onError?: (err: unknown) => void,
+): EventSelector => {
 	return (...args) => {
 		try {
 			return func(...args);
-		} catch {
+		} catch (e) {
+			onError?.(e);
 			return false;
 		}
 	};
@@ -117,6 +129,8 @@ class TaskScheduler {
 			selector: () => true,
 			state: 'new',
 		};
+
+		return uid;
 	}
 
 	installHook<T extends string>(type: T, hook: EventHook<T>) {
@@ -175,6 +189,12 @@ class TaskScheduler {
 	}
 
 	private processIteration() {
+		this.forEachTask((uid, task) => {
+			if (task.state === 'new') {
+				return this.resumeAndUpdate(uid, task, [new TaskContext(this)]);
+			}
+		});
+
 		const [eventType, ...eventData] = this.eventSource.pull(this.calculatePullDelay());
 
 		if (!isNil(eventType)) {
@@ -182,10 +202,6 @@ class TaskScheduler {
 		}
 
 		this.forEachTask((uid, task) => {
-			if (task.state === 'new') {
-				return this.resumeAndUpdate(uid, task, [new TaskContext()]);
-			}
-
 			if (
 				coroutine.status(task.handle) === 'dead'
 				|| task.state !== 'running'
@@ -304,7 +320,10 @@ class TaskScheduler {
 	) {
 		const [filter, timeout] = data;
 
-		const selector = errorSafeSelector(isFunction(filter) ? (filter as EventSelector) : () => false);
+		const selector = errorSafeSelector(
+			isFunction(filter) ? (filter as EventSelector) : () => false,
+			err => this.logger.error('event selector threw', err),
+		);
 		const deadline = isNumber(timeout) ? (timeout + this.clock.time()) : undefined;
 
 		return {
