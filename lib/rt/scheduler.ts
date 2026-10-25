@@ -157,7 +157,7 @@ class TaskScheduler {
 	}
 
 	private processIteration() {
-		const [eventType, ...eventData] = this.eventSource.pull(this.options.heartbeat);
+		const [eventType, ...eventData] = this.eventSource.pull(this.calculatePullDelay());
 
 		if (!isNil(eventType)) {
 			this.processHooks(eventType, ...eventData);
@@ -175,10 +175,27 @@ class TaskScheduler {
 				return this.resumeAndUpdate(uid, task, [eventType, ...eventData]);
 			}
 
-			if (!isNil(task.deadline) && this.clock.time() > task.deadline) {
+			if (!isNil(task.deadline) && this.clock.time() >= task.deadline) {
 				return this.resumeAndUpdate(uid, task, [TIMEOUT_EVENT]);
 			}
 		});
+	}
+
+	private calculatePullDelay() {
+		const now = this.clock.time();
+
+		const delays = Object.values(this.tasks)
+			.map(task => task.deadline)
+			.filter(dl => !isNil(dl))
+			.map(dl => dl - now);
+
+
+		const nextDeadlineDelay = Math.max(
+			0,
+			Math.min(...delays),
+		);
+
+		return Math.min(this.options.heartbeat, nextDeadlineDelay);
 	}
 
 	private processHooks(
