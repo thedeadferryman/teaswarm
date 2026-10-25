@@ -4,7 +4,7 @@ import Transport from '@lib/net/transport';
 import RadpServer from '@lib/net/radp/server';
 import { InMemoryDataProvider } from '@lib/net/radp/DataProvider';
 import * as event from 'event';
-import ThreadPool from '@lib/std/ThreadPool';
+import ThreadPool from '@lib/rt/threadpool';
 
 const modem = asComponent(component.getPrimary('modem'));
 

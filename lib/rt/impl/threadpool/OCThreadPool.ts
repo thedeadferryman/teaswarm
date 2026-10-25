@@ -1,19 +1,20 @@
+import type ThreadPool from '@lib/rt/threadpool';
 import * as thread from 'thread';
 
-export interface ThreadPoolOptions {
+export interface OCThreadPoolOptions {
 	poolSize: number;
 }
 
-class ThreadPool {
+export class OCThreadPool implements ThreadPool {
 	private handles: OpenOS.Thread[];
 
 	static default() {
-		return new ThreadPool({
+		return new OCThreadPool({
 			poolSize: 12,
 		});
 	}
 
-	constructor(private options: ThreadPoolOptions) {
+	constructor(private options: OCThreadPoolOptions) {
 		this.handles = [];
 	}
 
@@ -45,5 +46,3 @@ class ThreadPool {
 		return thread.waitForAll(this.handles);
 	}
 }
-
-export default ThreadPool;

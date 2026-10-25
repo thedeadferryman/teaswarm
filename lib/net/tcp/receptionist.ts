@@ -4,7 +4,7 @@ import type { RawPacket, Peer } from '@lib/net/types';
 import { tryParsePacket, parsePacket, type TcpPacket, encodePacket, type TcpPacketType } from '@lib/net/tcp/packet';
 import { isNil } from '@lib/util';
 import Reception from '@lib/net/tcp/reception';
-import ThreadPool from '@lib/std/ThreadPool';
+import ThreadPool from '@lib/rt/threadpool';
 import type { Addr } from '@lib/types';
 import * as computer from 'computer';
 

@@ -6,7 +6,7 @@ import { type PacketMatcher, ofType } from '@lib/net/radp/util';
 import type { TcpTransmissionOptions } from '@lib/net/tcp/transmission';
 import type { RadpDataProvider } from '@lib/net/radp/DataProvider';
 import RequestHandler from '@lib/net/radp/RequestHandler';
-import type ThreadPool from '@lib/std/ThreadPool';
+import type ThreadPool from '@lib/rt/threadpool';
 
 export interface RadpServerOptions {
 	controlPort: number;

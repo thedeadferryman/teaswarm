@@ -2,7 +2,7 @@ import { asComponent } from '@lib/util';
 import * as component from 'component';
 import Transport from '@lib/net/transport';
 import Receptionist from '@lib/net/tcp/receptionist';
-import ThreadPool from '@lib/std/ThreadPool';
+import ThreadPool from '@lib/rt/threadpool';
 
 const modem = asComponent(component.getPrimary('modem'));
 

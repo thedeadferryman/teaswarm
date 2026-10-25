@@ -2,7 +2,7 @@ import type Transport from '@lib/net/transport';
 import Receptionist from '@lib/net/tcp/receptionist';
 import * as computer from 'computer';
 import type { Peer } from '@lib/net/types';
-import ThreadPool from '@lib/std/ThreadPool';
+import ThreadPool from '@lib/rt/threadpool';
 
 export interface ScoopOptions {
 	localPort: number;
