@@ -1,6 +1,6 @@
 import { isNil, isString } from '@lib/util';
 import TaskScheduler, { type EventSelector } from '@lib/rt/scheduler';
-import { type EventPullResult, isTaskState } from '@lib/rt/impl/scheduler/types';
+import { type EventPullResult, isDeadTaskState, isSchedulerEvent } from '@lib/rt/impl/scheduler/types';
 
 export const contexts = new LuaMap<LuaThread, TaskContext>();
 
@@ -45,9 +45,15 @@ export class TaskContext {
 	waitForCompletion(uid: string, timeout?: number) {
 		const [result] = coroutine.yield('waitFor', uid, timeout);
 
-		if (!isTaskState(result)) return undefined;
+		if (isDeadTaskState(result)) {
+			return [true, result] as const;
+		}
 
-		return result;
+		if (isSchedulerEvent(result, 'timeout')) {
+			return [false, 'timeout'] as const;
+		}
+
+		return [false, 'invalid'] as const;
 	}
 
 	// dispatch(task: (context: TaskContext) => unknown) {

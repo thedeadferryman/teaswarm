@@ -1,18 +1,18 @@
 import * as uuid from 'uuid';
 import { isNil, isFunction, isNumber, isString } from '@lib/util';
 import { TaskContext, contexts } from '@lib/rt/impl/scheduler/context';
-import { type EventPullResult, type TaskState, isTaskMessageType } from '@lib/rt/impl/scheduler/types';
+import {
+	type EventPullResult,
+	type TaskState,
+	isTaskMessageType,
+	isDeadTaskState,
+	SchedulerEvents,
+} from '@lib/rt/impl/scheduler/types';
 
 export interface TaskSchedulerOptions {
 	heartbeat: number;
 	capacity: number;
 }
-
-export const SchedulerEvents = {
-	timeout: '##timeout',
-	taskStateChange: '##taskStateChange',
-} as const;
-
 
 export interface EventSource {
 	pull: (timeout?: number) => EventPullResult<string> | [undefined];
@@ -29,10 +29,11 @@ export interface Logger {
 export type EventSelector = (eventType: string, ...data: unknown[]) => boolean;
 
 interface Task {
-	handle: LuaThread;
-	selector: EventSelector;
-	deadline?: number;
 	state: TaskState;
+	handle: LuaThread;
+	selector?: EventSelector;
+	deadline?: number;
+	onTimeout?: () => unknown;
 }
 
 setmetatable(contexts, { __mode: 'k' });
@@ -61,8 +62,6 @@ const errorSafeSelector = (
 		}
 	};
 };
-
-const DEAD_TASK_STATES = ['ill', 'finished'];
 
 class TaskScheduler {
 	private tasks: Record<string, Task> = {};
@@ -141,7 +140,7 @@ class TaskScheduler {
 
 		if (isNil(task)) return false;
 
-		if (DEAD_TASK_STATES.includes(task.state)) return false;
+		if (isDeadTaskState(task.state)) return false;
 
 		return coroutine.status(task.handle) !== 'dead';
 	}
@@ -158,19 +157,15 @@ class TaskScheduler {
 		const observedTasks = Object.keys(this.taskObservers);
 
 		for (const uid of observedTasks) {
-			const task = this.tasks[uid];
+			const task = this.tasks[uid] ?? { state: 'finished' };
 
-			if (isNil(task)) {
-				delete this.taskObservers[uid];
-				continue;
-			}
-
-			this.reportTaskStateChange(task.state, this.taskObservers[uid] ?? []);
+			this.reportTaskStateChange(uid, task.state, this.taskObservers[uid] ?? []);
 			delete this.taskObservers[uid];
 		}
 	}
 
 	private reportTaskStateChange(
+		observedUid: string,
 		state: TaskState,
 		observers: string[],
 	) {
@@ -183,14 +178,18 @@ class TaskScheduler {
 				|| coroutine.status(observer.handle) === 'dead'
 			) continue;
 
-			this.resumeAndUpdate(uid, observer, [state]);
+			if (uid === observedUid) {
+				this.resumeAndUpdate(uid, observer, [undefined]);
+			} else if (isDeadTaskState(state)) {
+				this.resumeAndUpdate(uid, observer, [state]);
+			}
 		}
 	}
 
 	private cleanupTasks() {
 		this.forEachTask((uid, task) => {
 			if (
-				DEAD_TASK_STATES.includes(task.state)
+				isDeadTaskState(task.state)
 				|| coroutine.status(task.handle) === 'dead'
 			) {
 				delete this.tasks[uid];
@@ -231,6 +230,7 @@ class TaskScheduler {
 
 			if (
 				!isNil(eventType)
+				&& !isNil(task.selector)
 				&& task.selector(eventType, ...(eventData as OC.EventMap[OC.EventType]))
 			) {
 				return this.resumeAndUpdate(uid, task, [eventType, ...eventData]);
@@ -281,7 +281,7 @@ class TaskScheduler {
 		const newTaskState = this.doResumeTask(uid, task, resumeArgs);
 
 		this.tasks[uid] = {
-			...task,
+			handle: task.handle,
 			...newTaskState,
 		};
 	}
@@ -306,7 +306,6 @@ class TaskScheduler {
 
 	private handleTaskFinished(): Omit<Task, 'handle'> {
 		return {
-			selector: () => false,
 			state: 'finished',
 			deadline: undefined,
 		};
@@ -316,7 +315,6 @@ class TaskScheduler {
 		this.logger.error(`task ${uid} failed: ${message}`);
 
 		return {
-			selector: () => false,
 			state: 'ill',
 			deadline: undefined,
 		} satisfies Omit<Task, 'handle'>;
@@ -367,10 +365,7 @@ class TaskScheduler {
 		const [observedUid, timeout] = data;
 
 		if (!isString(observedUid)) {
-			return {
-				state: 'ill',
-				selector: () => false,
-			};
+			return { state: 'ill' };
 		}
 
 		const deadline = isNumber(timeout) ? (timeout + this.clock.time()) : undefined;
@@ -379,7 +374,6 @@ class TaskScheduler {
 		this.taskObservers[observedUid].push(uid);
 
 		return {
-			selector: () => false,
 			deadline,
 			state: 'running',
 		};

@@ -9,9 +9,31 @@ export type EventPullResult<T extends string> =
 export const TaskStates = ['new', 'running', 'ill', 'finished'] as const;
 export type TaskState = typeof TaskStates[number];
 
+const DeadTaskStates = ['ill', 'finished'] satisfies TaskState[];
+export type DeadTaskState = typeof DeadTaskStates[number];
+
+
 export const isTaskState = (value: unknown): value is TaskState => (
 	isString(value)
 	&& TaskStates.includes(value as TaskState)
+);
+
+export const isDeadTaskState = (value: unknown): value is DeadTaskState => (
+	isTaskState(value)
+	&& DeadTaskStates.includes(value as DeadTaskState)
+);
+
+export const SchedulerEvents = {
+	timeout: '##timeout',
+} as const;
+
+export type SchedulerEventMap = typeof SchedulerEvents;
+
+export const isSchedulerEvent = <T extends keyof SchedulerEventMap>(
+	value: unknown,
+	evType: T,
+): value is SchedulerEventMap[T] => (
+	value === SchedulerEvents[evType]
 );
 
 
