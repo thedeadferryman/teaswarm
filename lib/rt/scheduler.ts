@@ -61,8 +61,26 @@ export class TaskContext implements ITaskContext {
 	}
 }
 
+interface SchedulerController {
+	shutdown: () => void;
+}
+
+type EventHook<T extends string> = (
+	controller: SchedulerController,
+	...args: EventPullResult<T>
+) => unknown;
+
+type AnyEventHook = (controller: SchedulerController, ...args: unknown[]) => unknown;
+
 class TaskScheduler {
 	private tasks: Record<string, Task> = {};
+
+	private hooks: Record<string, AnyEventHook> = {};
+	private hookBindings: Record<string, string[]> = {};
+
+	private controller: SchedulerController = {
+		shutdown: () => undefined,
+	};
 
 	constructor(
 		private eventSource: EventSource,
@@ -71,7 +89,7 @@ class TaskScheduler {
 	) {
 	}
 
-	dispatch(body: (controller: TaskContext) => unknown) {
+	dispatch(body: (context: TaskContext) => unknown) {
 		const coro = coroutine.create(body);
 		const uid = uuid.next();
 
@@ -81,14 +99,35 @@ class TaskScheduler {
 		};
 	}
 
+	installHook<T extends string>(type: T, hook: EventHook<T>) {
+		const uid = uuid.next();
+		this.hooks[uid] = hook as AnyEventHook;
+
+		this.hookBindings[type] ||= [];
+		this.hookBindings[type].push(uid);
+
+		return uid;
+	}
+
+	dropHook(uid: string) {
+		delete this.hooks[uid];
+	}
+
 	run() {
 		let terminate = false;
+
+		this.controller = {
+			shutdown: () => {
+				terminate = true;
+			},
+		};
 
 		while (true) {
 			if (terminate) break;
 
 			this.initTasks();
 			this.cleanupTasks();
+			this.cleanupHooks();
 			this.processIteration();
 		}
 	}
@@ -109,8 +148,20 @@ class TaskScheduler {
 		});
 	}
 
+	private cleanupHooks() {
+		for (const type of Object.keys(this.hookBindings)) {
+			const currentBindings = this.hookBindings[type];
+
+			if (isNil(currentBindings)) continue;
+
+			this.hookBindings[type] = currentBindings.filter(binding => !isNil(this.hooks[binding]));
+		}
+	}
+
 	private processIteration() {
 		const [eventType, ...eventData] = this.eventSource.pull(this.options.heartbeat);
+
+		this.processHooks(eventType, ...eventData);
 
 		this.forEachTask((uid, task) => {
 			if (task.selector(eventType, ...(eventData as OC.EventMap[OC.EventType]))) {
@@ -121,6 +172,17 @@ class TaskScheduler {
 				this.resumeTask(uid, task, [TIMEOUT_EVENT]);
 			}
 		});
+	}
+
+	private processHooks(
+		type: string,
+		...args: unknown[]
+	) {
+		for (const binding of this.hookBindings[type] ?? []) {
+			const hook = this.hooks[binding];
+
+			hook?.(this.controller, type, ...args);
+		}
 	}
 
 	private resumeTask(
@@ -134,10 +196,10 @@ class TaskScheduler {
 			return this.handleTaskError(uid, data[0]);
 		}
 
-		return this.handleTaskMessage(uid, data) ?? this.handleTaskError(uid, 'invalid task message');
+		return this.handleTaskMessage(data) ?? this.handleTaskError(uid, 'invalid task message');
 	}
 
-	private handleTaskMessage(uid: string, data: unknown[]) {
+	private handleTaskMessage(data: unknown[]) {
 		if (data.length < 2) return;
 
 		const type = data.shift();
@@ -146,14 +208,13 @@ class TaskScheduler {
 
 		switch (type) {
 			case 'pullFiltered':
-				return this.handleTaskPull(uid, data);
+				return this.handleTaskPull(data);
 			default:
 				return;
 		}
 	}
 
 	private handleTaskPull(
-		uid: string,
 		data: unknown[],
 	) {
 		const [filter, timeout] = data;
