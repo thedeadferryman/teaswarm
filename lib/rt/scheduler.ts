@@ -10,7 +10,7 @@ type CustomEventPullResult = LuaMultiReturn<[string, ...unknown[]]>;
 type EventPullResult<T extends string> = T extends OC.EventType ? OCEventPullResult<T> : CustomEventPullResult;
 
 export interface EventSource {
-	pull: (timeout?: number) => EventPullResult<string>;
+	pull: (timeout?: number) => EventPullResult<string> | [undefined];
 }
 
 export interface Clock {
@@ -24,12 +24,13 @@ export interface ITaskContext {
 	pullEvent: <T extends string>(type: T, timeout?: number) => EventPullResult<T>;
 }
 
+type TaskState = 'new' | 'running' | 'ill' | 'finished';
+
 interface Task {
 	handle: LuaThread;
 	selector: EventSelector;
 	deadline?: number;
-	ill?: boolean;
-	needsInit?: boolean;
+	state: TaskState;
 }
 
 const TaskMessageTypes = ['pullFiltered'] as const;
@@ -39,7 +40,7 @@ const isTaskMessageType = (value: unknown): value is TaskMessageType => (
 	isString(value) && TaskMessageTypes.includes(value as TaskMessageType)
 );
 
-export const TIMEOUT_EVENT = 'timeout';
+export const TIMEOUT_EVENT = '##timeout';
 
 export class TaskContext implements ITaskContext {
 	constructor() {
@@ -89,13 +90,14 @@ class TaskScheduler {
 	) {
 	}
 
-	dispatch(body: (context: TaskContext) => unknown) {
+	dispatch(body: (context: ITaskContext) => unknown) {
 		const coro = coroutine.create(body);
 		const uid = uuid.next();
 
 		this.tasks[uid] = {
 			handle: coro,
 			selector: () => true,
+			state: 'new',
 		};
 	}
 
@@ -125,24 +127,20 @@ class TaskScheduler {
 		while (true) {
 			if (terminate) break;
 
-			this.initTasks();
 			this.cleanupTasks();
 			this.cleanupHooks();
 			this.processIteration();
 		}
 	}
 
-	private initTasks() {
-		this.forEachTask((_, task) => {
-			if (task.needsInit) {
-				coroutine.resume(task.handle, new TaskContext());
-			}
-		});
-	}
-
 	private cleanupTasks() {
+		const deadStates: TaskState[] = ['ill', 'finished'];
+
 		this.forEachTask((uid, task) => {
-			if (task.ill || coroutine.status(task.handle) === 'dead') {
+			if (
+				deadStates.includes(task.state)
+				|| coroutine.status(task.handle) === 'dead'
+			) {
 				delete this.tasks[uid];
 			}
 		});
@@ -161,15 +159,24 @@ class TaskScheduler {
 	private processIteration() {
 		const [eventType, ...eventData] = this.eventSource.pull(this.options.heartbeat);
 
-		this.processHooks(eventType, ...eventData);
+		if (!isNil(eventType)) {
+			this.processHooks(eventType, ...eventData);
+		}
 
 		this.forEachTask((uid, task) => {
-			if (task.selector(eventType, ...(eventData as OC.EventMap[OC.EventType]))) {
-				this.resumeTask(uid, task, [eventType, ...eventData]);
+			if (task.state === 'new') {
+				return this.resumeAndUpdate(uid, task, [new TaskContext()]);
+			}
+
+			if (
+				!isNil(eventType)
+				&& task.selector(eventType, ...(eventData as OC.EventMap[OC.EventType]))
+			) {
+				return this.resumeAndUpdate(uid, task, [eventType, ...eventData]);
 			}
 
 			if (!isNil(task.deadline) && this.clock.time() > task.deadline) {
-				this.resumeTask(uid, task, [TIMEOUT_EVENT]);
+				return this.resumeAndUpdate(uid, task, [TIMEOUT_EVENT]);
 			}
 		});
 	}
@@ -178,19 +185,37 @@ class TaskScheduler {
 		type: string,
 		...args: unknown[]
 	) {
-		for (const binding of this.hookBindings[type] ?? []) {
+		const bindings = this.hookBindings[type] ?? [];
+
+		for (const binding of bindings) {
 			const hook = this.hooks[binding];
 
 			hook?.(this.controller, type, ...args);
 		}
 	}
 
-	private resumeTask(
+	private resumeAndUpdate(uid: string, task: Task, resumeArgs: unknown[]) {
+		const newTaskState = this.doResumeTask(uid, task, resumeArgs);
+
+		this.tasks[uid] = {
+			...task,
+			...newTaskState,
+		};
+	}
+
+	private doResumeTask(
 		uid: string,
 		task: Task,
 		resumeArgs: unknown[],
 	): Omit<Task, 'handle'> {
 		const [success, ...data] = coroutine.resume(task.handle, ...resumeArgs);
+
+		if (coroutine.status(task.handle) === 'dead') {
+			return {
+				selector: () => false,
+				state: 'finished',
+			};
+		}
 
 		if (!success) {
 			return this.handleTaskError(uid, data[0]);
@@ -222,7 +247,11 @@ class TaskScheduler {
 		const selector = isFunction(filter) ? (filter as EventSelector) : () => false;
 		const deadline = isNumber(timeout) ? (timeout + this.clock.time()) : undefined;
 
-		return { selector, deadline };
+		return {
+			selector,
+			deadline,
+			state: 'running',
+		} satisfies Omit<Task, 'handle'>;
 	}
 
 	private handleTaskError(uid: string, message: string) {
@@ -230,8 +259,8 @@ class TaskScheduler {
 
 		return {
 			selector: () => false,
-			ill: true,
-		};
+			state: 'ill',
+		} satisfies Omit<Task, 'handle'>;
 	}
 
 	private forEachTask(cb: (uid: string, task: Task) => void) {
