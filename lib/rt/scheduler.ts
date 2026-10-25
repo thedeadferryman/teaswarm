@@ -168,11 +168,14 @@ class TaskScheduler {
 	private reportTaskStateChange(
 		observedUid: string,
 		state: TaskState | undefined,
-		observers: string[],
+		observersIn: string[],
 	) {
 		const isDeadState = isDeadTaskState(state);
 
-		for (const uid of observers) {
+		const observers = observersIn
+			.filter(uid => uid !== observedUid);
+
+		for (const uid of observersIn) {
 			const observer = this.tasks[uid];
 
 			if (
@@ -190,7 +193,11 @@ class TaskScheduler {
 			}
 		}
 
-		return isDeadState || isNil(state);
+		return (
+			isDeadState || isNil(state)
+				? undefined
+				: observers
+		);
 	}
 
 	private cleanupTasks() {
