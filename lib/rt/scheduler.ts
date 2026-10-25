@@ -5,9 +5,12 @@ export interface TaskSchedulerOptions {
 	heartbeat: number;
 }
 
+export const TIMEOUT_EVENT = '##timeout' as const;
+
 type OCEventPullResult<T extends OC.EventType> = LuaMultiReturn<[T, ...OC.EventMap[T]]>;
 type CustomEventPullResult = LuaMultiReturn<[string, ...unknown[]]>;
-type EventPullResult<T extends string> = T extends OC.EventType ? OCEventPullResult<T> : CustomEventPullResult;
+type EventPullResult<T extends string> =
+	(T extends OC.EventType ? OCEventPullResult<T> : CustomEventPullResult);
 
 export interface EventSource {
 	pull: (timeout?: number) => EventPullResult<string> | [undefined];
@@ -19,9 +22,11 @@ export interface Clock {
 
 export type EventSelector = (eventType: string, ...data: unknown[]) => boolean;
 
+type SchedulerEventPullResult<T> = EventPullResult<string> | LuaMultiReturn<[typeof TIMEOUT_EVENT]>;
+
 export interface ITaskContext {
-	pullEventFiltered: (selector: EventSelector, timeout?: number) => EventPullResult<string>;
-	pullEvent: <T extends string>(type: T, timeout?: number) => EventPullResult<T>;
+	pullEventFiltered: (selector: EventSelector, timeout?: number) => SchedulerEventPullResult<string>;
+	pullEvent: <T extends string>(type: T, timeout?: number) => SchedulerEventPullResult<T>;
 }
 
 type TaskState = 'new' | 'running' | 'ill' | 'finished';
@@ -40,14 +45,12 @@ const isTaskMessageType = (value: unknown): value is TaskMessageType => (
 	isString(value) && TaskMessageTypes.includes(value as TaskMessageType)
 );
 
-export const TIMEOUT_EVENT = '##timeout';
-
 export class TaskContext implements ITaskContext {
 	constructor() {
 	}
 
 	pullEventFiltered(selector: EventSelector, timeout?: number) {
-		const [type, ...data] = coroutine.yield(selector, timeout);
+		const [type, ...data] = coroutine.yield('pullFiltered', selector, timeout);
 
 		if (isString(type)) return $multi(type, ...data);
 
@@ -189,6 +192,7 @@ class TaskScheduler {
 			.filter(dl => !isNil(dl))
 			.map(dl => dl - now);
 
+		if (delays.length <= 0) return this.options.heartbeat;
 
 		const nextDeadlineDelay = Math.max(
 			0,
@@ -227,18 +231,31 @@ class TaskScheduler {
 	): Omit<Task, 'handle'> {
 		const [success, ...data] = coroutine.resume(task.handle, ...resumeArgs);
 
-		if (coroutine.status(task.handle) === 'dead') {
-			return {
-				selector: () => false,
-				state: 'finished',
-			};
-		}
-
 		if (!success) {
 			return this.handleTaskError(uid, data[0]);
 		}
 
+		if (coroutine.status(task.handle) === 'dead') {
+			return this.handleTaskFinished();
+		}
+
 		return this.handleTaskMessage(data) ?? this.handleTaskError(uid, 'invalid task message');
+	}
+
+	private handleTaskFinished(): Omit<Task, 'handle'> {
+		return {
+			selector: () => false,
+			state: 'finished',
+		};
+	}
+
+	private handleTaskError(uid: string, message: string) {
+		print(`task ${uid} failed: ${message}`);
+
+		return {
+			selector: () => false,
+			state: 'ill',
+		} satisfies Omit<Task, 'handle'>;
 	}
 
 	private handleTaskMessage(data: unknown[]) {
@@ -268,15 +285,6 @@ class TaskScheduler {
 			selector,
 			deadline,
 			state: 'running',
-		} satisfies Omit<Task, 'handle'>;
-	}
-
-	private handleTaskError(uid: string, message: string) {
-		print(`task ${uid} failed: ${message}`);
-
-		return {
-			selector: () => false,
-			state: 'ill',
 		} satisfies Omit<Task, 'handle'>;
 	}
 
