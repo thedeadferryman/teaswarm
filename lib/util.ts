@@ -79,6 +79,18 @@ export const unpackAddr = (bAddr: string) => {
 export const isNil = <T>(value: T | null | undefined): value is null | undefined =>
 	value === null || value === undefined;
 
+export const isString = (value: unknown): value is string => (
+	type(value) === 'string'
+);
+
+export const isNumber = (value: unknown): value is number => (
+	type(value) === 'number'
+);
+
+export const isFunction = (value: unknown): value is Function => (
+	type(value) === 'function'
+);
+
 interface LuaTypeMap {
 	string: string;
 	number: number;
