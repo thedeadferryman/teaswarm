@@ -25,6 +25,7 @@ export const isDeadTaskState = (value: unknown): value is DeadTaskState => (
 
 export const SchedulerEvents = {
 	timeout: '##timeout',
+	error: '##error',
 } as const;
 
 export type SchedulerEventMap = typeof SchedulerEvents;

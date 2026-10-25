@@ -157,18 +157,21 @@ class TaskScheduler {
 		const observedTasks = Object.keys(this.taskObservers);
 
 		for (const uid of observedTasks) {
-			const task = this.tasks[uid] ?? { state: 'finished' };
+			const task = this.tasks[uid];
 
-			this.reportTaskStateChange(uid, task.state, this.taskObservers[uid] ?? []);
-			delete this.taskObservers[uid];
+			if (
+				this.reportTaskStateChange(uid, task?.state, this.taskObservers[uid] ?? [])
+			) delete this.taskObservers[uid];
 		}
 	}
 
 	private reportTaskStateChange(
 		observedUid: string,
-		state: TaskState,
+		state: TaskState | undefined,
 		observers: string[],
 	) {
+		const isDeadState = isDeadTaskState(state);
+
 		for (const uid of observers) {
 			const observer = this.tasks[uid];
 
@@ -179,11 +182,15 @@ class TaskScheduler {
 			) continue;
 
 			if (uid === observedUid) {
-				this.resumeAndUpdate(uid, observer, [undefined]);
-			} else if (isDeadTaskState(state)) {
+				this.resumeAndUpdate(uid, observer, [SchedulerEvents.error, 'deadlock']);
+			} else if (isDeadState) {
 				this.resumeAndUpdate(uid, observer, [state]);
+			} else if (isNil(state)) {
+				this.resumeAndUpdate(uid, observer, [SchedulerEvents.error, 'not-found']);
 			}
 		}
+
+		return isDeadState || isNil(state);
 	}
 
 	private cleanupTasks() {
@@ -237,6 +244,7 @@ class TaskScheduler {
 			}
 
 			if (!isNil(task.deadline) && this.clock.time() >= task.deadline) {
+				task.onTimeout?.();
 				return this.resumeAndUpdate(uid, task, [SchedulerEvents.timeout]);
 			}
 		});
@@ -376,6 +384,13 @@ class TaskScheduler {
 		return {
 			deadline,
 			state: 'running',
+			onTimeout: () => {
+				if (!isNil(this.taskObservers[observedUid])) {
+					this.taskObservers[observedUid] =
+						this.taskObservers[observedUid]
+							.filter(observer => observer !== uid);
+				}
+			},
 		};
 	}
 
