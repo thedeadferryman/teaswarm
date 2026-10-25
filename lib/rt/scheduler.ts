@@ -206,7 +206,7 @@ class TaskScheduler {
 		type: string,
 		...args: unknown[]
 	) {
-		const bindings = this.hookBindings[type] ?? [];
+		const bindings = [...this.hookBindings[type] ?? []];
 
 		for (const binding of bindings) {
 			const hook = this.hooks[binding];
