@@ -159,23 +159,26 @@ class TaskScheduler {
 		for (const uid of observedTasks) {
 			const task = this.tasks[uid];
 
-			if (
-				this.reportTaskStateChange(uid, task?.state, this.taskObservers[uid] ?? [])
-			) delete this.taskObservers[uid];
+			const remainingObservers = this.reportTaskStateChange(uid, task?.state, this.taskObservers[uid] ?? []);
+
+			if (isNil(remainingObservers)) {
+				delete this.taskObservers[uid];
+			} else {
+				this.taskObservers[uid] = remainingObservers;
+			}
 		}
 	}
 
 	private reportTaskStateChange(
 		observedUid: string,
 		state: TaskState | undefined,
-		observersIn: string[],
+		observers: string[],
 	) {
 		const isDeadState = isDeadTaskState(state);
 
-		const observers = observersIn
-			.filter(uid => uid !== observedUid);
+		const newObservers: string[] = [];
 
-		for (const uid of observersIn) {
+		for (const uid of observers) {
 			const observer = this.tasks[uid];
 
 			if (
@@ -186,7 +189,12 @@ class TaskScheduler {
 
 			if (uid === observedUid) {
 				this.resumeAndUpdate(uid, observer, [SchedulerEvents.error, 'deadlock']);
-			} else if (isDeadState) {
+				continue;
+			}
+
+			newObservers.push(uid);
+
+			if (isDeadState) {
 				this.resumeAndUpdate(uid, observer, [state]);
 			} else if (isNil(state)) {
 				this.resumeAndUpdate(uid, observer, [SchedulerEvents.error, 'not-found']);
@@ -196,7 +204,7 @@ class TaskScheduler {
 		return (
 			isDeadState || isNil(state)
 				? undefined
-				: observers
+				: newObservers
 		);
 	}
 
